@@ -472,6 +472,18 @@ class BatchParallel_HQS_XGenerator:
             return applied_fista_solve
 
 
+class BatchParallel_DirectSolve_HQS_XGenerator:
+    def __init__(self):
+        pass
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> HQS_ParameterizedSolveFn:
+        return batch_parallel_direct_solve
+
+
+
 class DirectSolve_HQS_ZGenerator:
     def __init__(self):
         pass

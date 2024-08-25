@@ -12,6 +12,7 @@ from denoise_inverse_alg.glm_inverse_alg import PackedGLMTensors, FlashedModelRe
     MixNMatch_BatchKnownSeparable_Trial_GLM_ProxProblem
 from denoise_inverse_alg.hqs_alg import BatchParallel_HQS_X_Problem, ScheduleVal, iter_rho_fixed_prior_hqs_solve, \
     construct_create_batched_denoiser_HQS_Z_problem_fn, HQS_ParameterizedSolveFn, make_logspaced_rho_schedule
+from denoise_inverse_alg.noiseless_inverse_alg import BatchNoiselessLinear_HQS_XProb
 from denoise_inverse_alg.poisson_inverse_alg import PackedLNPTensors, BatchFlashedFrameRatePoissonProxProblem
 from eval_fns.eval import MaskedMSELoss, MS_SSIM, SSIM
 from linear_decoding_models.linear_decoding_models import ClosedFormLinearModel
@@ -323,6 +324,216 @@ def batch_parallel_generate_flashed_hqs_reconstructions(
     return output_image_buffer_np
 
 
+def batch_parallel_generated_noiseless_linear_hqs_reconstructions(
+        linear_projections: np.ndarray,
+        image_range_tuple: Tuple[float, float],
+        linear_projection_tensors: np.ndarray,
+        reconstruction_hyperparams: GridSearchParams,
+        make_x_prob_solver_generator_fn: Callable[[], Iterator[HQS_ParameterizedSolveFn]],
+        make_z_prob_solver_generator_fn: Callable[[], Iterator[HQS_ParameterizedSolveFn]],
+        max_batch_size: int,
+        device: torch.device,
+        initialize_noise_level: float = 1e-3,
+        valid_region_mask: Optional[np.ndarray] = None) -> np.ndarray:
+    '''
+    linear_projections: shape (n_examples, n_cells)
+    image_range_tuple: min and max value for the images
+    linear_projection_tensors: shape (n_cells, height, width), linear projection filters for each cell
+    '''
+
+    n_examples, n_cells = linear_projections.shape
+    _, height, width = linear_projection_tensors.shape
+
+    linear_projections_torch = torch.tensor(linear_projections, dtype=torch.float32, device=device)
+
+    #################################################################################
+    # get the hyperparameters
+    lambda_start, lambda_end = reconstruction_hyperparams.lambda_start, reconstruction_hyperparams.lambda_end
+    prior_weight = reconstruction_hyperparams.prior_weight
+    max_iter = reconstruction_hyperparams.max_iter
+    schedule_rho = make_logspaced_rho_schedule(ScheduleVal(lambda_start, lambda_end, prior_weight, max_iter))
+
+    #################################################################################
+    create_HQS_Z_prob_fn = construct_create_batched_denoiser_HQS_Z_problem_fn(
+        (height, width),
+        image_range_tuple,
+        device,
+        valid_region_mask=valid_region_mask
+    )
+
+    # run the first N-1 iterations
+    output_image_buffer_np = np.zeros((n_examples, height, width), dtype=np.float32)
+    pbar = tqdm.tqdm(total=n_examples)
+    for low in range(0, n_examples, max_batch_size):
+        high = min(low + max_batch_size, n_examples)
+        eff_batch_size = high - low
+
+        ################################################
+        # make the problem and transfer to device
+        hqs_x_problem = BatchNoiselessLinear_HQS_XProb(
+            eff_batch_size,
+            linear_projection_tensors,
+            dtype=torch.float32
+        ).to(device)
+
+        hqs_z_problem = create_HQS_Z_prob_fn(eff_batch_size)
+        ##################################################
+
+        unblind_denoise_hqs_x_prob_solver_iter = make_x_prob_solver_generator_fn()
+        unblind_denoise_hqs_z_prob_solver_iter = make_z_prob_solver_generator_fn()
+
+        initialize_z_tensor = torch.randn((eff_batch_size, height, width),
+                                          dtype=torch.float32) * initialize_noise_level
+
+        hqs_x_problem.reinitialize_variables(initialized_z_const=initialize_z_tensor)
+        hqs_z_problem.reinitialize_variables()
+
+        _ = iter_rho_fixed_prior_hqs_solve(
+            hqs_x_problem,
+            iter(unblind_denoise_hqs_x_prob_solver_iter),
+            hqs_z_problem,
+            iter(unblind_denoise_hqs_z_prob_solver_iter),
+            iter(schedule_rho),
+            prior_weight,
+            verbose=False,
+            save_intermediates=False,
+            projections=linear_projections_torch[low:high, ...]
+        )
+
+        denoise_hqs_reconstructed_image = hqs_x_problem.get_reconstructed_image()
+        output_image_buffer_np[low:high, :, :] = denoise_hqs_reconstructed_image
+
+        del hqs_x_problem, hqs_z_problem
+
+        pbar.update(max_batch_size)
+
+    return output_image_buffer_np
+
+
+def batch_parallel_noiseless_linear_hqs_grid_search(
+        linear_projections: np.ndarray,
+        orig_stimuli: np.ndarray,
+        image_range_tuple: Tuple[float, float],
+        linear_projection_tensors: np.ndarray,
+        batch_size: int,
+        mse_module: MaskedMSELoss,
+        ssim_module: SSIM,
+        ms_ssim_module: MS_SSIM,
+        grid_lambda_start: np.ndarray,
+        grid_lambda_end: np.ndarray,
+        grid_prior: np.ndarray,
+        max_iter: int,
+        make_x_prob_solver_generator_fn: Callable[[], Iterator[HQS_ParameterizedSolveFn]],
+        make_z_prob_solver_generator_fn: Callable[[], Iterator[HQS_ParameterizedSolveFn]],
+        device: torch.device,
+        initialize_noise_level: float = 1e-3,
+        valid_region_mask: Optional[np.ndarray] = None) -> Dict[GridSearchParams, GridSearchReconstructions]:
+
+    '''
+    linear_projections: shape (n_examples, n_cells)
+    image_range_tuple: min and max value for the images
+    linear_projection_tensors: shape (n_cells, height, width), linear projection filters for each cell
+    '''
+
+    n_cells, height, width = linear_projection_tensors.shape
+    n_examples = linear_projections.shape[0]
+
+    linear_projections_torch = torch.tensor(linear_projections,
+                                            dtype=torch.float32, device=device)
+
+    example_stimuli_torch = torch.tensor(orig_stimuli, dtype=torch.float32, device=device)
+    rescaled_example_stimuli = image_rescale_0_1(example_stimuli_torch)
+    del example_stimuli_torch
+
+    ################################################################################
+    create_HQS_Z_prob_fn = construct_create_batched_denoiser_HQS_Z_problem_fn(
+        (height, width),
+        image_range_tuple,
+        device,
+        valid_region_mask=valid_region_mask
+    )
+
+    grid_search_pbar = tqdm.tqdm(
+        total=grid_prior.shape[0] * grid_lambda_start.shape[0] * grid_lambda_end.shape[0])
+
+    ret_dict = {}
+
+    for ix, grid_params in enumerated_product(grid_prior, grid_lambda_start, grid_lambda_end):
+        prior_weight, lambda_start, lambda_end = grid_params
+
+        output_dict_key = GridSearchParams(lambda_start, lambda_end, prior_weight, max_iter)
+        schedule_rho = make_logspaced_rho_schedule(ScheduleVal(lambda_start, lambda_end, prior_weight, max_iter))
+
+        ################################################
+        # make the problem and transfer to device
+        hqs_x_problem = BatchNoiselessLinear_HQS_XProb(
+            batch_size,
+            linear_projection_tensors,
+            dtype=torch.float32
+        ).to(device)
+
+        hqs_z_problem = create_HQS_Z_prob_fn(batch_size)
+
+        ################################################################################
+        output_image_buffer_np = np.zeros((n_examples, height, width), dtype=np.float32)
+        pbar = tqdm.tqdm(total=n_examples)
+
+        for low in range(0, n_examples, batch_size):
+            high = low + batch_size
+
+            unblind_denoise_hqs_x_prob_solver_iter = make_x_prob_solver_generator_fn()
+            unblind_denoise_hqs_z_prob_solver_iter = make_z_prob_solver_generator_fn()
+
+            initialize_z_tensor = torch.randn((batch_size, height, width),
+                                              dtype=torch.float32) * initialize_noise_level
+
+            hqs_x_problem.reinitialize_variables(initialized_z_const=initialize_z_tensor)
+            hqs_z_problem.reinitialize_variables()
+
+            _ = iter_rho_fixed_prior_hqs_solve(
+                hqs_x_problem,
+                iter(unblind_denoise_hqs_x_prob_solver_iter),
+                hqs_z_problem,
+                iter(unblind_denoise_hqs_z_prob_solver_iter),
+                iter(schedule_rho),
+                prior_weight,
+                verbose=False,
+                save_intermediates=False,
+                projections=linear_projections_torch[low:high, ...]
+            )
+
+            denoise_hqs_reconstructed_image = hqs_x_problem.get_reconstructed_image()
+            output_image_buffer_np[low:high, :, :] = denoise_hqs_reconstructed_image
+
+            pbar.update(batch_size)
+
+        pbar.close()
+
+        output_image_buffer = torch.tensor(output_image_buffer_np, dtype=torch.float32, device=device)
+
+        # now compute SSIM, MS-SSIM, and masked MSE
+        reconstruction_rescaled = image_rescale_0_1(output_image_buffer)
+        masked_mse = torch.mean(mse_module(reconstruction_rescaled, rescaled_example_stimuli)).item()
+        ssim_val = ssim_module(rescaled_example_stimuli[:, None, :, :],
+                               reconstruction_rescaled[:, None, :, :]).item()
+        ms_ssim_val = ms_ssim_module(rescaled_example_stimuli[:, None, :, :],
+                                     reconstruction_rescaled[:, None, :, :]).item()
+
+        ret_dict[output_dict_key] = GridSearchReconstructions(
+            orig_stimuli,
+            output_image_buffer_np,
+            masked_mse,
+            ssim_val,
+            ms_ssim_val)
+
+        print(f"{output_dict_key}, MSE {masked_mse}, SSIM {ssim_val}, MS-SSIM {ms_ssim_val}")
+
+        del output_image_buffer, hqs_x_problem, hqs_z_problem, reconstruction_rescaled
+        grid_search_pbar.update(1)
+
+    return ret_dict
+
+
 def mixnmatch_batch_parallel_flashed_hqs_grid_search(
         example_keyed_spikes: Dict[str, np.ndarray],
         example_stimuli: np.ndarray,
@@ -343,7 +554,6 @@ def mixnmatch_batch_parallel_flashed_hqs_grid_search(
         device: torch.device,
         initialize_noise_level: float = 1e-3,
         valid_region_mask: Optional[np.ndarray] = None) -> Dict[GridSearchParams, GridSearchReconstructions]:
-
     n_examples, height, width = example_stimuli.shape
 
     assert n_examples % batch_size == 0, 'number of example images must be multiple of batch size'
@@ -464,7 +674,6 @@ def mixnmatch_batch_parallel_generate_flashed_hqs_reconstructions(
         initialize_noise_level: float = 1e-3,
         valid_region_mask: Optional[np.ndarray] = None) \
         -> np.ndarray:
-
     _first_key = list(example_keyed_spikes.keys())[0]
     _first_model = typed_packed_model_tensors[_first_key]
     _first_spikes = example_keyed_spikes[_first_key]

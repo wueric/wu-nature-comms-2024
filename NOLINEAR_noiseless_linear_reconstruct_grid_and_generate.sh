@@ -9,17 +9,14 @@ ${SCRIPTNAME} <config> <output_base> [optional one-letter arguments]
 
 OPTIONS
 
--j <jitter-sd>         Standard deviation of Gaussian for perturbing spike times
-                       In units of electrical samples at 20 kHz
-
--f                     Feedback only model
+-y <path-to-yaml>      Use specified YAML, rather than auto-generate
 
 -o                     Just run the generation portion only; assumes that the grid search
                        has already completed successfully.
 
 -hh                    Just run the heldout generation portion only
 
-Eric Wu, 2023-03-18
+Eric Wu, 2024-08-24
 "
 
 usage() {
@@ -34,8 +31,11 @@ fi
 
 ###################################
 # Global flags
-LAMBDA_START_FLAGS="-ls -2 -1 3"
-LAMBDA_END_FLAGS="-le 0 2 5"
+NOISE_INIT_FLAGS="-n 1e-3"
+#LAMBDA_START_FLAGS="-ls -2 -1 3"
+#LAMBDA_END_FLAGS="-le 0 2 5"
+LAMBDA_START_FLAGS="-ls -5 -1 9"
+LAMBDA_END_FLAGS="-le -1 1 9"
 PRIOR_FLAGS="-p 0.1 0.125 0.15 0.175 0.2 0.225 0.25 0.275 0.3"
 
 HQS_MAX_ITER=10
@@ -48,25 +48,24 @@ OUTPUT_BASE="";
 
 #################
 # Flag arguments
-JITTER=0.0
-FB_ONLY="" # -f
+YAMLPATH=""
 OPTIMIZE_ONLY="" # -o
 HELDOUT_ONLY="" #-hh
-
+FIXATIONAL_EM="" #-f
 
 while [ "$1" != "" ]; do
   case $1 in
-  -j)
+  -y)
     shift
-    JITTER="$1"
-    shift
-    ;;
-  -f)
-    FB_ONLY="$1"
+    YAMLPATH="$1"
     shift
     ;;
   -o)
     OPTIMIZE_ONLY="$1"
+    shift
+    ;;
+  -f)
+    FIXATIONAL_EM="$1"
     shift
     ;;
   -hh)
@@ -96,18 +95,18 @@ RECONSTRUCTION_HELDOUT_PATH=$RECONS_PATH/heldout_reconstructions.p
 
 FLASHED_RECONS_GRID_PATH=$GRID_PATH/grid.p
 
-CELL_TYPES=("ON parasol" "OFF parasol" "ON midget" "OFF midget")
-
-CAT_TYPE_FNAME_ARR=()
-for ct in "${CELL_TYPES[@]}"; do
-  CT_FNAME_STR=$(echo $ct | sed 's/ /_/' | tr '[:upper:]' '[:lower:]')
-  MODEL_FILE_NAME="wn_joint_${CT_FNAME_STR}_fits.p"
-  CAT_TYPE_FNAME_ARR=("${CAT_TYPE_FNAME_ARR[@]}" "$ct" $MODEL_FILE_NAME)
-done
-
-# write YAML
-echo python write_model_yaml_file.py $YAMLPATH $MODEL_ROOT "${CAT_TYPE_FNAME_ARR[@]}"
-python write_model_yaml_file.py $YAMLPATH $MODEL_ROOT "${CAT_TYPE_FNAME_ARR[@]}"
+if [[ $YAMLPATH == "" ]]; then
+  CELL_TYPES=("ON parasol" "OFF parasol" "ON midget" "OFF midget")
+  CAT_TYPE_FNAME_ARR=()
+  for ct in "${CELL_TYPES[@]}"; do
+    CT_FNAME_STR=$(echo $ct | sed 's/ /_/' | tr '[:upper:]' '[:lower:]')
+    MODEL_FILE_NAME="wn_joint_${CT_FNAME_STR}_fits.p"
+    CAT_TYPE_FNAME_ARR=("${CAT_TYPE_FNAME_ARR[@]}" "$ct" $MODEL_FILE_NAME)
+  done
+  # write YAML
+  echo python write_model_yaml_file.py $YAMLPATH $MODEL_ROOT "${CAT_TYPE_FNAME_ARR[@]}"
+  python write_model_yaml_file.py $YAMLPATH $MODEL_ROOT "${CAT_TYPE_FNAME_ARR[@]}"
+fi
 
 rc=$?
 if [[ $rc != 0 ]]; then
@@ -117,8 +116,8 @@ fi
 
 if [ "$OPTIMIZE_ONLY" != "-o" ]; then
   #do the reconstruction grid search for static images
-  echo python grid_search_hqs_cropped_glm.py $CONFIG $YAMLPATH $FLASHED_RECONS_GRID_PATH $LAMBDA_START_FLAGS $LAMBDA_END_FLAGS $PRIOR_FLAGS -it $HQS_MAX_ITER -j $JITTER -m $FB_ONLY
-  python grid_search_hqs_cropped_glm.py $CONFIG $YAMLPATH $FLASHED_RECONS_GRID_PATH $LAMBDA_START_FLAGS $LAMBDA_END_FLAGS $PRIOR_FLAGS -it $HQS_MAX_ITER -j $JITTER -m $FB_ONLY
+  echo python grid_search_flashed_noiseless_rf_reconstructions.py $CONFIG $YAMLPATH $FLASHED_RECONS_GRID_PATH $NOISE_INIT_FLAGS $LAMBDA_START_FLAGS $LAMBDA_END_FLAGS $PRIOR_FLAGS -it $HQS_MAX_ITER $FIXATIONAL_EM
+  python grid_search_flashed_noiseless_rf_reconstructions.py $CONFIG $YAMLPATH $FLASHED_RECONS_GRID_PATH $NOISE_INIT_FLAGS $LAMBDA_START_FLAGS $LAMBDA_END_FLAGS $PRIOR_FLAGS -it $HQS_MAX_ITER $FIXATIONAL_EM
   rc=$?
   if [[ $rc != 0 ]]; then
     echo "Flashed grid search failed"
@@ -139,8 +138,8 @@ echo "OPTIMAL RECONS. HYPERPARAMETERS $OPT_LAMBDA_START, $OPT_LAMBDA_END, $OPT_P
 printf "\n"
 
 if [ "$HELDOUT_ONLY" != "-hh" ]; then
-  echo python generate_cropped_glm_hqs_reconstructions.py $CONFIG $YAMLPATH $RECONSTRUCTION_TEST_PATH -st $OPT_LAMBDA_START -en $OPT_LAMBDA_END -lam $OPT_PRIOR_WEIGHT -i $HQS_MAX_ITER -j $JITTER -m $FB_ONLY
-  python generate_cropped_glm_hqs_reconstructions.py $CONFIG $YAMLPATH $RECONSTRUCTION_TEST_PATH -st $OPT_LAMBDA_START -en $OPT_LAMBDA_END -lam $OPT_PRIOR_WEIGHT -i $HQS_MAX_ITER -j $JITTER -m $FB_ONLY
+  echo python flashed_noiseless_rf_reconstructions.py $CONFIG $YAMLPATH $RECONSTRUCTION_TEST_PATH $NOISE_INIT_FLAGS -st $OPT_LAMBDA_START -en $OPT_LAMBDA_END -lam $OPT_PRIOR_WEIGHT -i $HQS_MAX_ITER -m $FIXATIONAL_EM
+  python flashed_noiseless_rf_reconstructions.py $CONFIG $YAMLPATH $RECONSTRUCTION_TEST_PATH $NOISE_INIT_FLAGS -st $OPT_LAMBDA_START -en $OPT_LAMBDA_END -lam $OPT_PRIOR_WEIGHT -i $HQS_MAX_ITER -m $FIXATIONAL_EM
   rc=$?
   if [[ $rc != 0 ]]; then
     echo "Test partition flashed reconstruction failed"
@@ -149,8 +148,9 @@ if [ "$HELDOUT_ONLY" != "-hh" ]; then
   printf "\n"
 fi
 
-echo python generate_cropped_glm_hqs_reconstructions.py $CONFIG $YAMLPATH $RECONSTRUCTION_HELDOUT_PATH -st $OPT_LAMBDA_START -en $OPT_LAMBDA_END -lam $OPT_PRIOR_WEIGHT -i $HQS_MAX_ITER -j $JITTER -m -hh $FB_ONLY
-python generate_cropped_glm_hqs_reconstructions.py $CONFIG $YAMLPATH $RECONSTRUCTION_HELDOUT_PATH -st $OPT_LAMBDA_START -en $OPT_LAMBDA_END -lam $OPT_PRIOR_WEIGHT -i $HQS_MAX_ITER -j $JITTER -m -hh $FB_ONLY
+echo python flashed_noiseless_rf_reconstructions.py $CONFIG $YAMLPATH $RECONSTRUCTION_HELDOUT_PATH $NOISE_INIT_FLAGS -st $OPT_LAMBDA_START -en $OPT_LAMBDA_END -lam $OPT_PRIOR_WEIGHT -i $HQS_MAX_ITER -hh -m $FIXATIONAL_EM
+python flashed_noiseless_rf_reconstructions.py $CONFIG $YAMLPATH $RECONSTRUCTION_HELDOUT_PATH $NOISE_INIT_FLAGS -st $OPT_LAMBDA_START -en $OPT_LAMBDA_END -lam $OPT_PRIOR_WEIGHT -i $HQS_MAX_ITER -hh -m $FIXATIONAL_EM
+
 rc=$?
 if [[ $rc != 0 ]]; then
   echo "Heldout partition flashed reconstruction failed"

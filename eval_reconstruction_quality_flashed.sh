@@ -33,11 +33,17 @@ CONFIG="";
 RECONS_BASE=""
 METRICS_BASE="";
 WAS_LINEAR="";
+RETRIEVE_KEY="glm_cropped"
 
 while [ "$1" != "" ]; do
   case $1 in
   -l)
     WAS_LINEAR="$1"
+    shift
+    ;;
+  -k)
+    shift
+    RETRIEVE_KEY=$1
     shift
     ;;
   *)
@@ -66,8 +72,8 @@ if [ "$WAS_LINEAR" == "-l" ]; then
   RECONSTRUCTION_HELDOUT_METRICS_PATH=$METRICS_BASE/heldout_metrics.p
 fi
 
-echo python compute_static_metrics_by_piece.py $CONFIG $RECONSTRUCTION_TEST_PATH "glm_cropped"  $RECONSTRUCTION_TEST_METRICS_PATH
-python compute_static_metrics_by_piece.py $CONFIG $RECONSTRUCTION_TEST_PATH "glm_cropped"  $RECONSTRUCTION_TEST_METRICS_PATH
+echo python compute_static_metrics_by_piece.py $CONFIG $RECONSTRUCTION_TEST_PATH "$RETRIEVE_KEY"  $RECONSTRUCTION_TEST_METRICS_PATH
+python compute_static_metrics_by_piece.py $CONFIG $RECONSTRUCTION_TEST_PATH "$RETRIEVE_KEY"  $RECONSTRUCTION_TEST_METRICS_PATH
 
-echo python compute_static_metrics_by_piece.py $CONFIG $RECONSTRUCTION_HELDOUT_PATH "glm_cropped"  $RECONSTRUCTION_HELDOUT_METRICS_PATH
-python compute_static_metrics_by_piece.py $CONFIG $RECONSTRUCTION_HELDOUT_PATH "glm_cropped"  $RECONSTRUCTION_HELDOUT_METRICS_PATH
+echo python compute_static_metrics_by_piece.py $CONFIG $RECONSTRUCTION_HELDOUT_PATH "$RETRIEVE_KEY"  $RECONSTRUCTION_HELDOUT_METRICS_PATH
+python compute_static_metrics_by_piece.py $CONFIG $RECONSTRUCTION_HELDOUT_PATH "$RETRIEVE_KEY" $RECONSTRUCTION_HELDOUT_METRICS_PATH
