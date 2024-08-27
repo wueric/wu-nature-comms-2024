@@ -4,12 +4,15 @@ All of the code used to fit the encoding models and generate reconstructions is 
 underlying datasets are large, and the full procedure for fitting encoding models and generating reconstructions is computationally intensive, requiring several
 days of GPU computing, prefit models and a small subset of the data for demonstrating reconstruction are provided.
 
-# Example images with ground truth stimulus
+## Example images with ground truth stimulus
 
-![Example images group 1](./images/blogpost_examples1.svg)
+### Reconstructions with eye movements
 
-![Example images group 2](./images/blogpost_examples2.svg)
+![Example images group 1](./IMAGES/blogpost_examples1.svg)
 
+![Example images group 2](./IMAGES/blogpost_examples2.svg)
+
+Example reconstructions in the presence of fixational drift eye movements. Columns: Stimulus, the image presented to the retina; Simulated noiseless reconstruction, a reconstruction of the stimulus from linear projections onto the LNBRC filters (see Methods from the manuscript); Known-LNBRC-dCNN, MAP reconstruction with known eye movements; Zero-LNBRC-dCNN, MAP reconstruction with the (incorrect) assumption of zero eye movements; Joint-LNBRC-dCNN, joint estimation of image and eye movements; Known-LNBRC-1F, MAP reconstruction with known eye movements and the 1/F Gaussian image prior; and Known-LNP-1F, MAP reconstruction with simpler LNP encoding model and dCNN image prior.
 
 ## Dependencies and installation 
 
