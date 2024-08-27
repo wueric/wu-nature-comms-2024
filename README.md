@@ -6,6 +6,15 @@ days of GPU computing, prefit models and a small subset of the data for demonstr
 
 ## Example images with ground truth stimulus
 
+### Reconstructions from flashed images
+
+![Example images group 1](./IMAGES/flashed_blogpost_examples1.svg)
+![Example images group 1](./IMAGES/flashed_blogpost_examples2.svg)
+![Example images group 1](./IMAGES/flashed_blogpost_examples3.svg)
+
+Example reconstructions comparing LNBRC-dCNN with benchmarks and alternative models. Columns: Stimulus, the image presented to the retina; Simulated noiseless reconstruction, a reconstruction of the stimulus from linear projections onto the LNBRC filters (see Methods); Linear reconstruction, a simple benchmark computed using linear regression; ANN, direct artificial neural network reconstruction [Kim _et al._, 2020]; LNBRC-dCNN, our Bayesian method; LNBRC-1F, Bayesian method with the dCNN image prior with a simpler 1/F Gaussian image prior; and LNP-dCNN, replacing the LNBRC likelihood with a simpler LNP likelihood.
+
+
 ### Reconstructions with eye movements
 
 ![Example images group 1](./IMAGES/blogpost_examples1.svg)
