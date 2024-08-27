@@ -4,6 +4,13 @@ All of the code used to fit the encoding models and generate reconstructions is 
 underlying datasets are large, and the full procedure for fitting encoding models and generating reconstructions is computationally intensive, requiring several
 days of GPU computing, prefit models and a small subset of the data for demonstrating reconstruction are provided.
 
+# Example images with ground truth stimulus
+
+![Example images group 1](./images/blogpost_examples1.svg)
+
+![Example images group 2](./images/blogpost_examples2.svg)
+
+
 ## Dependencies and installation 
 
 ### Required dependencies
